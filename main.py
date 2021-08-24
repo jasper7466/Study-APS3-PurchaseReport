@@ -1,19 +1,21 @@
 import csv
-from datetime import datetime
 import locale
-from collections import defaultdict
+from datetime import datetime
+from collections import defaultdict, OrderedDict
 
 # config
-LOCALE = "ru_RU.UTF-8"
-INPUT_DATE_FORMAT = "%Y-%m-%d"
-OUTPUT_DATE_FORMAT = "%b %Y"
+LOCALE = 'ru_RU.UTF-8'
+INPUT_DATE_FORMAT = '%Y-%m-%d'
+OUTPUT_DATE_FORMAT = '%b %Y'
 NUM_OF_DECIMALS = 2
 DATA_NESTING_SEQUENCE = ['type', 'shop', 'category', 'name']
 PRICE_KEY = 'price'
 AMOUNT_KEY = 'amount'
+DATE_KEY = 'date'
 TOTAL_KEY = '!!total'
 MONTHLY_KEY = '!!monthly'
-METADATA_KEY = "!!meta"
+METADATA_KEY = '!!meta'
+TOTAL_COLUMN_CAPTION = 'итог'
 RECORD_ALIASES = {
     'type': {
         'sale': 'Продажи',
@@ -29,6 +31,10 @@ COLUMN_WIDTH_BASE = 12
 
 
 # utils/helpers
+def init_nested_dict():
+    return defaultdict(init_nested_dict)
+
+
 def append_placeholders(record, placeholders_dict):
     for key in record:
         if not record[key]:
@@ -41,7 +47,12 @@ def append_aliases(record, aliases_dict):
             record[key] = aliases[record[key]]
 
 
-def subtotal(record):
+def format_date(date_string, input_format, output_format='%d-%m-%Y'):
+    parsed = datetime.strptime(date_string, input_format)
+    return parsed.strftime(output_format)
+
+
+def get_subtotal(record):
     result = int(record[AMOUNT_KEY]) * float(record[PRICE_KEY])
     return round(result, NUM_OF_DECIMALS)
 
@@ -59,22 +70,13 @@ def get_nested_paths(source, record, sequence):
     return result
 
 
-def update_nested_totals(value, date_stamp, targets):
+def update_nested_totals(value, datestamp, targets):
     for target in targets:
         target[METADATA_KEY][TOTAL_KEY] = target[METADATA_KEY].get(TOTAL_KEY, 0) + value
-        target[METADATA_KEY][MONTHLY_KEY][date_stamp] = target[METADATA_KEY][MONTHLY_KEY].get(date_stamp, 0) + value
+        target[METADATA_KEY][MONTHLY_KEY][datestamp] = target[METADATA_KEY][MONTHLY_KEY].get(datestamp, 0) + value
 
 
-def date_formatter(date_string, input_format, output_format="%d-%m-%Y"):
-    parsed = datetime.strptime(date_string, input_format)
-    return parsed.strftime(output_format)
-
-
-def init_nested_dict():
-    return defaultdict(init_nested_dict)
-
-
-def side_print(value, shift_index=1):
+def print_aside(value, shift_index=1):
     depth = len(DATA_NESTING_SEQUENCE)
 
     for i in range(depth):
@@ -84,8 +86,49 @@ def side_print(value, shift_index=1):
             print(f'{value :<{COLUMN_WIDTH_ASIDE_MAX}}', end='')
 
 
+def print_header():
+    print_aside('')
+
+    for date in dates:
+        print(f'{date:>{COLUMN_WIDTH_BASE}}', end='')
+
+    print(f'{TOTAL_COLUMN_CAPTION:>{COLUMN_WIDTH_BASE}}', end='')
+
+
+def print_body(dictionary, level=0):
+    for key in dictionary:
+        if key == METADATA_KEY:
+            continue
+
+        print_aside(key, level)
+
+        for date in dates:
+            print(f'{dictionary[key][METADATA_KEY][MONTHLY_KEY].get(date, 0):>{COLUMN_WIDTH_BASE}.{NUM_OF_DECIMALS}f}',
+                  end='')
+        print(f'{dictionary[key][METADATA_KEY].get(TOTAL_KEY, 0):>{COLUMN_WIDTH_BASE}.{NUM_OF_DECIMALS}f}', end='')
+        new_line()
+
+        if isinstance(dictionary[key], dict):
+            print_body(dictionary[key], level + 1)
+        else:
+            print(dictionary[key])
+
+
 def new_line():
-    print("")
+    print('')
+
+
+def sorter(k_v):
+    if METADATA_KEY in k_v[1]:
+        return k_v[1][METADATA_KEY][TOTAL_KEY], k_v[0]
+    return 0, 0
+
+
+def sort(source):
+    for key in source:
+        if isinstance(source[key], dict) and METADATA_KEY in source[key]:
+            source[key] = OrderedDict(sorted(source[key].items(), key=lambda k_v: sorter(k_v), reverse=True))
+            sort(source[key])
 
 
 # init
@@ -100,69 +143,18 @@ with open('table.csv') as file:
         append_placeholders(transaction, RECORD_PLACEHOLDERS)
         append_aliases(transaction, RECORD_ALIASES)
 
-        date = date_formatter(transaction['date'], INPUT_DATE_FORMAT, OUTPUT_DATE_FORMAT)
+        date = format_date(transaction[DATE_KEY], INPUT_DATE_FORMAT, OUTPUT_DATE_FORMAT)
         dates.add(date)
 
-        transaction_subtotal = subtotal(transaction)
-
+        subtotal = get_subtotal(transaction)
         targets_to_update = get_nested_paths(storage, transaction, DATA_NESTING_SEQUENCE)
+        update_nested_totals(subtotal, date, targets_to_update)
 
-        update_nested_totals(transaction_subtotal, date, targets_to_update)
-
-        # operation = storage[transaction['type']]
-        # shop = operation[transaction['shop']]
-        # category = shop[transaction['category']]
-        # purchase = category[transaction['name']]
-        #
-        # operation[METADATA_KEY][MONTHLY_KEY][date] = round(
-        #     operation[METADATA_KEY][MONTHLY_KEY].get(date, 0) + transaction_subtotal, NUM_OF_DECIMALS)
-        # shop[METADATA_KEY][MONTHLY_KEY][date] = round(
-        #     shop[METADATA_KEY][MONTHLY_KEY].get(date, 0) + transaction_subtotal, NUM_OF_DECIMALS)
-        # category[METADATA_KEY][MONTHLY_KEY][date] = round(
-        #     category[METADATA_KEY][MONTHLY_KEY].get(date, 0) + transaction_subtotal, NUM_OF_DECIMALS)
-        # purchase[METADATA_KEY][MONTHLY_KEY][date] = round(
-        #     purchase[METADATA_KEY][MONTHLY_KEY].get(date, 0) + transaction_subtotal, NUM_OF_DECIMALS)
-        #
-        # operation[METADATA_KEY][TOTAL_KEY] = round(operation[METADATA_KEY].get(TOTAL_KEY, 0) + transaction_subtotal,
-        #                                            NUM_OF_DECIMALS)
-        # shop[METADATA_KEY][TOTAL_KEY] = round(shop[METADATA_KEY].get(TOTAL_KEY, 0) + transaction_subtotal,
-        #                                       NUM_OF_DECIMALS)
-        # category[METADATA_KEY][TOTAL_KEY] = round(category[METADATA_KEY].get(TOTAL_KEY, 0) + transaction_subtotal,
-        #                                           NUM_OF_DECIMALS)
-        # purchase[METADATA_KEY][TOTAL_KEY] = round(purchase[METADATA_KEY].get(TOTAL_KEY, 0) + transaction_subtotal,
-        #                                           NUM_OF_DECIMALS)
-
+# post-processing
 dates = sorted(dates, key=lambda date: datetime.strptime(date, OUTPUT_DATE_FORMAT))
-
+sort(storage)
 
 # print
-def print_report_header():
-    side_print("")
-
-    for date in dates:
-        print(f'{date:>{COLUMN_WIDTH_BASE}}', end='')
-
-    print(f'{"итог":>{COLUMN_WIDTH_BASE}}', end='')
-
-
-def dict_deep_print(dictionary, level=0):
-    for key in dictionary:
-        if key == METADATA_KEY:
-            continue
-
-        side_print(key, level)
-
-        for date in dates:
-            print(f'{dictionary[key][METADATA_KEY][MONTHLY_KEY].get(date, 0):>{COLUMN_WIDTH_BASE}.{NUM_OF_DECIMALS}f}', end='')
-        print(f'{dictionary[key][METADATA_KEY].get(TOTAL_KEY, 0):>{COLUMN_WIDTH_BASE}.{NUM_OF_DECIMALS}f}', end='')
-        new_line()
-
-        if isinstance(dictionary[key], dict):
-            dict_deep_print(dictionary[key], level + 1)
-        else:
-            print(dictionary[key])
-
-
-print_report_header()
+print_header()
 new_line()
-dict_deep_print(storage)
+print_body(storage)
